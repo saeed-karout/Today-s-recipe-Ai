@@ -80,7 +80,7 @@ export const handler: Handler = async (event) => {
     The response must be in ${language === "ar" ? "Arabic" : "English"}.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-05-20",
+      model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,

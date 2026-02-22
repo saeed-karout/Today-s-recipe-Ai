@@ -1,0 +1,7 @@
+{
+  "name": "East & West Kitchen | مطبخ الشرق والغرب",
+  "description": "Smart AI-powered recipe generator for Middle Eastern and Western Fast Food cuisines.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

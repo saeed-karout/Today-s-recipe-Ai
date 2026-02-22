@@ -137,30 +137,88 @@ export default function App() {
       setError(null);
     }
   };
+const handleGenerateText = async () => {
+  if (ingredients.length === 0) {
+    setError(t.noIngredients);
+    return;
+  }
+  setLoading(true);
+  setError(null);
+  setRecipe(null);
+  
+  try {
+    const response = await fetch('/api/generate-recipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        ingredients, 
+        cuisineType: cuisine, 
+        language: lang 
+      }),
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to generate recipe');
+    }
+    
+    setRecipe(data);
+  } catch (err) {
+    console.error('Error:', err);
+    setError(err.message || 'An error occurred');
+  } finally {
+    setLoading(false);
+  }
+};
 
-  const handleGenerateText = async () => {
-    if (ingredients.length === 0) {
-      setError(t.noIngredients);
-      return;
+const handleAnalyzeImage = async () => {
+  if (!image) {
+    setError(t.noImage);
+    return;
+  }
+  setLoading(true);
+  setError(null);
+  setRecipe(null);
+  
+  try {
+    const formData = new FormData();
+    formData.append('image', image);
+    formData.append('language', lang);
+    formData.append('cuisineType', cuisine);
+
+    const response = await fetch('/api/analyze-image', {
+      method: 'POST',
+      body: formData,
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to analyze image');
     }
-    setLoading(true);
-    setError(null);
-    setRecipe(null);
-    try {
-      const response = await fetch('/api/generate-recipe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ingredients, cuisineType: cuisine, language: lang }),
+    
+    setRecipe(data);
+    
+    // إضافة المكونات المكتشفة إلى القائمة
+    if (data.detectedIngredients && data.detectedIngredients.length > 0) {
+      setIngredients(prev => {
+        const newIngredients = [...prev];
+        data.detectedIngredients.forEach(ing => {
+          if (!newIngredients.includes(ing)) {
+            newIngredients.push(ing);
+          }
+        });
+        return newIngredients;
       });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error);
-      setRecipe(data);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
     }
-  };
+  } catch (err) {
+    console.error('Error:', err);
+    setError(err.message || 'An error occurred');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleAnalyzeImage = async () => {
     if (!image) {

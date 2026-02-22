@@ -138,6 +138,62 @@ export default function App() {
     }
   };
 
+  /** Resize/compress image in browser to avoid mobile upload size limits (e.g. Netlify 6MB). */
+  const compressImageForUpload = (file: File, maxEdge = 1200, maxSizeBytes = 1.8 * 1024 * 1024): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        let width = w;
+        let height = h;
+        if (w > maxEdge || h > maxEdge) {
+          if (w >= h) {
+            width = maxEdge;
+            height = Math.round((h * maxEdge) / w);
+          } else {
+            height = maxEdge;
+            width = Math.round((w * maxEdge) / h);
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(file);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const tryQuality = (q: number) => {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                resolve(file);
+                return;
+              }
+              if (blob.size <= maxSizeBytes || q <= 0.5) {
+                resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+                return;
+              }
+              tryQuality(Math.max(0.5, q - 0.15));
+            },
+            'image/jpeg',
+            q
+          );
+        };
+        tryQuality(0.88);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(file);
+      };
+      img.src = url;
+    });
+  };
+
   const handleGenerateText = async () => {
     if (ingredients.length === 0) {
       setError(t.noIngredients);
@@ -171,8 +227,9 @@ export default function App() {
     setError(null);
     setRecipe(null);
     try {
+      const fileToSend = await compressImageForUpload(image);
       const formData = new FormData();
-      formData.append('image', image);
+      formData.append('image', fileToSend);
       formData.append('language', lang);
       formData.append('cuisineType', cuisine);
 
@@ -180,14 +237,35 @@ export default function App() {
         method: 'POST',
         body: formData,
       });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error);
-      setRecipe(data);
-      if (data.detectedIngredients) {
-        setIngredients(prev => [...new Set([...prev, ...data.detectedIngredients])]);
+      const raw = await response.text();
+      if (!response.ok) {
+        if (raw.trimStart().startsWith('<')) {
+          setError(lang === 'ar' ? 'فشل الرفع. جرّب صورة أصغر أو اتصالاً أفضل.' : 'Upload failed. Try a smaller image or better connection.');
+          return;
+        }
+        let msg = response.statusText || `Error ${response.status}`;
+        try {
+          const errBody = raw ? JSON.parse(raw) : {};
+          if (errBody.error) msg = errBody.error;
+        } catch {
+          if (raw) msg = raw.slice(0, 150);
+        }
+        throw new Error(msg);
+      }
+      let data: Record<string, unknown>;
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        setError(lang === 'ar' ? 'استجابة غير متوقعة. جرّب صورة أصغر.' : 'Unexpected response. Try a smaller image.');
+        return;
+      }
+      if (data.error) throw new Error(String(data.error));
+      setRecipe(data as unknown as Recipe);
+      if (Array.isArray(data.detectedIngredients)) {
+        setIngredients(prev => [...new Set([...prev, ...(data.detectedIngredients as string[])])]);
       }
     } catch (err: any) {
-      setError(err.message);
+      setError(err?.message || String(err));
     } finally {
       setLoading(false);
     }

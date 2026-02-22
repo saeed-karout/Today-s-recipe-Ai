@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Camera, 
-  Upload, 
-  Plus, 
-  X, 
-  ChefHat, 
-  Clock, 
-  Flame, 
-  AlertTriangle, 
-  Globe, 
+import {
+  Camera,
+  Upload,
+  Plus,
+  X,
+  ChefHat,
+  Clock,
+  Flame,
+  AlertTriangle,
+  Globe,
   Languages,
   Loader2,
   UtensilsCrossed,
@@ -103,7 +103,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [error, setError] = useState<string | null>(null);
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const t = translations[lang];
   const isRtl = lang === 'ar';
@@ -137,88 +137,30 @@ export default function App() {
       setError(null);
     }
   };
-const handleGenerateText = async () => {
-  if (ingredients.length === 0) {
-    setError(t.noIngredients);
-    return;
-  }
-  setLoading(true);
-  setError(null);
-  setRecipe(null);
-  
-  try {
-    const response = await fetch('/api/generate-recipe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        ingredients, 
-        cuisineType: cuisine, 
-        language: lang 
-      }),
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to generate recipe');
-    }
-    
-    setRecipe(data);
-  } catch (err) {
-    console.error('Error:', err);
-    setError(err.message || 'An error occurred');
-  } finally {
-    setLoading(false);
-  }
-};
 
-const handleAnalyzeImage = async () => {
-  if (!image) {
-    setError(t.noImage);
-    return;
-  }
-  setLoading(true);
-  setError(null);
-  setRecipe(null);
-  
-  try {
-    const formData = new FormData();
-    formData.append('image', image);
-    formData.append('language', lang);
-    formData.append('cuisineType', cuisine);
-
-    const response = await fetch('/api/analyze-image', {
-      method: 'POST',
-      body: formData,
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to analyze image');
+  const handleGenerateText = async () => {
+    if (ingredients.length === 0) {
+      setError(t.noIngredients);
+      return;
     }
-    
-    setRecipe(data);
-    
-    // إضافة المكونات المكتشفة إلى القائمة
-    if (data.detectedIngredients && data.detectedIngredients.length > 0) {
-      setIngredients(prev => {
-        const newIngredients = [...prev];
-        data.detectedIngredients.forEach(ing => {
-          if (!newIngredients.includes(ing)) {
-            newIngredients.push(ing);
-          }
-        });
-        return newIngredients;
+    setLoading(true);
+    setError(null);
+    setRecipe(null);
+    try {
+      const response = await fetch('/api/generate-recipe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ingredients, cuisineType: cuisine, language: lang }),
       });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+      setRecipe(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
-  } catch (err) {
-    console.error('Error:', err);
-    setError(err.message || 'An error occurred');
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const handleAnalyzeImage = async () => {
     if (!image) {
@@ -269,7 +211,7 @@ const handleAnalyzeImage = async () => {
           >
             <ChefHat className="w-12 h-12 text-white" />
           </motion.div>
-          <motion.h1 
+          <motion.h1
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             className="text-4xl md:text-5xl font-bold text-white mb-2 drop-shadow-lg"
@@ -310,19 +252,19 @@ const handleAnalyzeImage = async () => {
               <ImageIcon className="w-6 h-6" />
               {t.imageSection}
             </h2>
-            
-            <div 
+
+            <div
               onClick={() => fileInputRef.current?.click()}
               className={`relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all hover:bg-white/10 ${imagePreview ? 'border-white/60' : 'border-white/40'}`}
             >
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleImageChange} 
-                accept="image/*" 
-                className="hidden" 
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleImageChange}
+                accept="image/*"
+                className="hidden"
               />
-              
+
               {imagePreview ? (
                 <div className="relative group">
                   <img src={imagePreview} alt="Preview" className="max-h-64 mx-auto rounded-xl shadow-lg" />
@@ -367,7 +309,7 @@ const handleAnalyzeImage = async () => {
             <div className="space-y-6">
               <div>
                 <label className="block text-white font-medium mb-2">{t.cuisineLabel}</label>
-                <select 
+                <select
                   value={cuisine}
                   onChange={(e) => setCuisine(e.target.value)}
                   className="w-full bg-white/20 backdrop-blur-md border border-white/30 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-white/50"

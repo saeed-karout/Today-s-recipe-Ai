@@ -14,3 +14,9 @@
   to = "/.netlify/functions/analyze-image"
   status = 200
   force = true
+
+# SPA: serve index.html for client-side routes (existing files are still served first)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

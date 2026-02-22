@@ -93,7 +93,18 @@ export const handler: Handler = async (event) => {
     const data = text ? JSON.parse(text) : {};
     return { statusCode: 200, headers: corsHeaders, body: JSON.stringify(data) };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to generate recipe";
+    const raw = err instanceof Error ? err.message : String(err);
+    let message = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      const inner = parsed?.error?.message ?? parsed?.message;
+      if (typeof inner === "string") message = inner;
+    } catch {
+      // keep message as raw
+    }
+    if (message.includes("leaked") || message.includes("API key")) {
+      message = "API key invalid or reported as leaked. Create a new key at Google AI Studio and set GEMINI_API_KEY in Netlify Environment variables, then redeploy.";
+    }
     console.error("generate-recipe error:", err);
     return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: message }) };
   }

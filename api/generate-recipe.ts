@@ -1,53 +1,11 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
-type Handler = (event: { httpMethod: string; body: string | null; headers: Record<string, string> }) => Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
-
-const SYSTEM_INSTRUCTION = `
-You are a professional chef specializing ONLY in Middle Eastern and Western Fast Food.
-STRICT RULES:
-1. ONLY provide recipes from these cuisines:
-   - Middle Eastern: Syrian, Lebanese, Iraqi, Palestinian, Egyptian, Jordanian, Saudi, Yemeni, Gulf.
-   - Western Fast Food: Burgers, Pizza, Crispy Chicken, Pasta, Sandwiches.
-2. ABSOLUTELY FORBIDDEN: Any Asian cuisines (Korean, Japanese, Chinese, Thai, Vietnamese, etc.), Turkish cuisine, or any other cuisine not mentioned above.
-3. If the user asks for a forbidden cuisine, politely refuse and explain that you only specialize in Middle Eastern and Western Fast Food.
-4. Use few-shot learning examples for quality:
-   - Maqluba (Palestine/Syria/Lebanon): Rice with chicken/meat, eggplant, cauliflower.
-   - Kibbeh (Syria/Lebanon/Iraq): Bulgur balls stuffed with meat and pine nuts.
-   - Freekeh (Syria/Palestine/Jordan): Green wheat with meat/chicken.
-   - Mandi (Yemen/Saudi): Rice with smoked meat/chicken.
-   - Kabsa (Saudi/Gulf): Long rice with meat/chicken and spices.
-5. Always respond in the language requested (Arabic or English).
-6. Output MUST be in valid JSON format.
-`;
-
-const RECIPE_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    recipeName: { type: Type.STRING, description: "Name of the recipe" },
-    origin: { type: Type.STRING, description: "Country or region of origin" },
-    cuisineType: { type: Type.STRING, description: "Middle Eastern or Western Fast Food" },
-    prepTime: { type: Type.STRING, description: "Preparation time" },
-    cookTime: { type: Type.STRING, description: "Cooking time" },
-    difficulty: { type: Type.STRING, description: "Easy, Medium, or Hard" },
-    ingredients: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "List of ingredients with quantities"
-    },
-    instructions: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "Step-by-step preparation steps"
-    },
-    chefTips: { type: Type.STRING, description: "Optional tips from the chef" },
-    detectedIngredients: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "Only for image analysis: list of ingredients detected in the image"
-    }
-  },
-  required: ["recipeName", "origin", "cuisineType", "prepTime", "cookTime", "difficulty", "ingredients", "instructions"]
-};
+// تعريف الأنواع
+type Handler = (event: { 
+  httpMethod: string; 
+  body: string | null; 
+  headers: Record<string, string> 
+}) => Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -55,57 +13,137 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
+// SYSTEM_INSTRUCTION مبسطة للاختبار
+const SYSTEM_INSTRUCTION = `
+You are a professional chef specializing in Middle Eastern and Western Fast Food.
+Respond in JSON format.
+`;
+
 export const handler: Handler = async (event) => {
+  // معالجة CORS preflight
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders, body: "" };
   }
+  
+  // السماح فقط بـ POST
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: "Method not allowed" }) };
+    return { 
+      statusCode: 405, 
+      headers: corsHeaders, 
+      body: JSON.stringify({ error: "Method not allowed. Use POST." }) 
+    };
   }
 
+  // التحقق من مفتاح API
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: "GEMINI_API_KEY is not set" }) };
+    return { 
+      statusCode: 500, 
+      headers: corsHeaders, 
+      body: JSON.stringify({ error: "GEMINI_API_KEY is not set in environment variables" }) 
+    };
   }
 
   try {
+    // قراءة body الطلب
     const body = JSON.parse(event.body || "{}");
-    const { ingredients, cuisineType, language } = body;
+    const { ingredients, cuisineType = "Middle Eastern", language = "en" } = body;
+    
+    // التحقق من وجود المكونات
     if (!Array.isArray(ingredients) || ingredients.length === 0) {
-      return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: "ingredients array is required" }) };
+      return { 
+        statusCode: 400, 
+        headers: corsHeaders, 
+        body: JSON.stringify({ error: "ingredients array is required" }) 
+      };
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-    const prompt = `Generate a ${cuisineType || "Middle Eastern"} recipe using these ingredients: ${ingredients.join(", ")}. 
-    The response must be in ${language === "ar" ? "Arabic" : "English"}.`;
+    console.log("🔄 Generating recipe with:", { ingredients, cuisineType, language });
 
+    // تهيئة Gemini
+    const ai = new GoogleGenAI({ apiKey });
+    
+    // بناء prompt
+    const prompt = `
+    ${SYSTEM_INSTRUCTION}
+    
+    Generate a ${cuisineType} recipe using these ingredients: ${ingredients.join(", ")}.
+    The response must be in ${language === "ar" ? "Arabic" : "English"}.
+    
+    Return a valid JSON object with this exact structure:
+    {
+      "recipeName": "Name of the recipe",
+      "origin": "Country of origin",
+      "cuisineType": "${cuisineType}",
+      "prepTime": "Preparation time",
+      "cookTime": "Cooking time",
+      "difficulty": "Easy/Medium/Hard",
+      "ingredients": ["list", "of", "ingredients", "with", "quantities"],
+      "instructions": ["step 1", "step 2"],
+      "chefTips": "Optional tip"
+    }
+    `;
+
+    // استدعاء Gemini بدون responseSchema المعقد
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3-flash-preview", // اسم النموذج الذي تريده
       contents: prompt,
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
-        responseSchema: RECIPE_SCHEMA,
+        temperature: 0.3,
+        maxOutputTokens: 4096,
       },
     });
 
-    const text = response.text;
-    const data = text ? JSON.parse(text) : {};
-    return { statusCode: 200, headers: corsHeaders, body: JSON.stringify(data) };
+    // التحقق من وجود رد
+    if (!response || !response.text) {
+      throw new Error("Empty response from Gemini API");
+    }
+
+    // استخراج JSON من الرد (قد يكون محاطاً بعلامات Markdown)
+    let text = response.text;
+    const jsonMatch = text.match(/```(?:json)?\n([\s\S]*?)\n```/) || 
+                      text.match(/{[\s\S]*}/);
+    
+    if (jsonMatch) {
+      text = jsonMatch[1] || jsonMatch[0];
+    }
+
+    // تحويل النص إلى JSON
+    const recipeJson = JSON.parse(text.trim());
+    
+    return { 
+      statusCode: 200, 
+      headers: corsHeaders, 
+      body: JSON.stringify(recipeJson) 
+    };
+
   } catch (err: unknown) {
-    const raw = err instanceof Error ? err.message : String(err);
-    let message = raw;
-    try {
-      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-      const inner = parsed?.error?.message ?? parsed?.message;
-      if (typeof inner === "string") message = inner;
-    } catch {
-      // keep message as raw
+    // تسجيل الخطأ بالكامل للتصحيح
+    console.error("🔴 Full error:", err);
+    
+    // استخراج رسالة الخطأ
+    let errorMessage = "Unknown error occurred";
+    if (err instanceof Error) {
+      errorMessage = err.message;
+      
+      // محاولة استخراج تفاصيل أكثر من أخطاء Gemini
+      try {
+        const parsed = JSON.parse(err.message);
+        if (parsed.error?.message) {
+          errorMessage = parsed.error.message;
+        }
+      } catch {
+        // ليس JSON، نستخدم الرسالة كما هي
+      }
     }
-    if (message.includes("expired") || message.includes("renew") || message.includes("leaked") || message.includes("API key") || message.includes("INVALID")) {
-      message = "API key expired or invalid. Create a new key at Google AI Studio (aistudio.google.com/apikey), set GEMINI_API_KEY in Netlify Environment variables, then redeploy.";
-    }
-    console.error("generate-recipe error:", err);
-    return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: message }) };
+    
+    return { 
+      statusCode: 500, 
+      headers: corsHeaders, 
+      body: JSON.stringify({ 
+        error: errorMessage,
+        details: err instanceof Error ? err.toString() : String(err)
+      }) 
+    };
   }
 };

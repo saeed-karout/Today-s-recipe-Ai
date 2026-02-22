@@ -58,6 +58,9 @@ const translations = {
     instructionsLabel: 'خطوات التحضير:',
     tipsLabel: 'نصائح الشيف:',
     footerNote: 'هذا التطبيق مخصص فقط للمطابخ الشرق أوسطية والغربية السريعة.',
+    author: 'المهندس محمد سعيد قاروط',
+    portfolio: 'معرض أعمالي',
+    contactWhatsApp: 'واتساب',
     errorTitle: 'عذراً، حدث خطأ',
     noIngredients: 'يرجى إضافة مكونات أولاً',
     noImage: 'يرجى اختيار صورة أولاً',
@@ -87,6 +90,9 @@ const translations = {
     instructionsLabel: 'Instructions:',
     tipsLabel: 'Chef\'s Tips:',
     footerNote: 'This app is strictly for Middle Eastern and Western Fast Food cuisines.',
+    author: 'Engineer Mhd Saeed Karout',
+    portfolio: 'My Portfolio',
+    contactWhatsApp: 'WhatsApp',
     errorTitle: 'Sorry, an error occurred',
     noIngredients: 'Please add ingredients first',
     noImage: 'Please select an image first',
@@ -572,8 +578,28 @@ export default function App() {
           </AnimatePresence>
         </main>
 
-        <footer className="mt-16 text-center text-white/60 text-sm">
-          <p className="mb-2">{t.footerNote}</p>
+        <footer className="mt-16 text-center text-white/60 text-sm space-y-3 pb-8">
+          <p>{t.footerNote}</p>
+          <p className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+            <span>{t.author}:</span>
+            <a
+              href="https://myportfolio-karout.netlify.app/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-white/90 hover:text-white underline"
+            >
+              {t.portfolio}
+            </a>
+            <span>·</span>
+            <a
+              href="https://wa.me/963957608833"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-white/90 hover:text-white underline"
+            >
+              {t.contactWhatsApp} 
+            </a>
+          </p>
           <p>© {new Date().getFullYear()} {t.title}</p>
         </footer>
       </div>

@@ -1,4 +1,5 @@
 import busboy from "busboy";
+import sharp from "sharp";
 import { GoogleGenAI, Type } from "@google/genai";
 
 type Handler = (event: {
@@ -129,7 +130,14 @@ export const handler: Handler = async (event) => {
 
     const language = parsed.language?.[0] || "en";
     const cuisineType = parsed.cuisineType?.[0] || "Middle Eastern";
-    const base64Image = imageEntry.buffer.toString("base64");
+
+    // Resize/compress to stay under function timeout and reduce Gemini processing time
+    const MAX_EDGE = 800;
+    const resized = await sharp(imageEntry.buffer)
+      .resize(MAX_EDGE, MAX_EDGE, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+    const base64Image = resized.toString("base64");
 
     const prompt = `Analyze this image to detect food ingredients. Then, generate a ${cuisineType} recipe using these detected ingredients. The response must be in ${language === "ar" ? "Arabic" : "English"}. Include the detected ingredients in the 'detectedIngredients' field.`;
 
@@ -140,7 +148,7 @@ export const handler: Handler = async (event) => {
         { text: prompt },
         {
           inlineData: {
-            mimeType: imageEntry.mimeType,
+            mimeType: "image/jpeg",
             data: base64Image,
           },
         },
@@ -167,6 +175,9 @@ export const handler: Handler = async (event) => {
     }
     if (message.includes("expired") || message.includes("renew") || message.includes("leaked") || message.includes("API key") || message.includes("INVALID") || message.includes("referer")) {
       message = "API key issue. Check Google AI Studio and Netlify GEMINI_API_KEY, then redeploy.";
+    }
+    if (message.includes("timed out") || message.includes("Timeout") || message.includes("Sandbox")) {
+      message = "Request took too long. Try a smaller image or try again.";
     }
     console.error("analyze-image error:", err);
     return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: message }) };

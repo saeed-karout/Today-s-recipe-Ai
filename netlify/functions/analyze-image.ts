@@ -1,6 +1,12 @@
+import busboy from "busboy";
 import { GoogleGenAI, Type } from "@google/genai";
 
-type Handler = (event: { httpMethod: string; body: string | null; headers: Record<string, string> }) => Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
+type Handler = (event: {
+  httpMethod: string;
+  body: string | null;
+  headers: Record<string, string>;
+  isBase64Encoded?: boolean;
+}) => Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
 
 const SYSTEM_INSTRUCTION = `
 You are a professional chef specializing ONLY in Middle Eastern and Western Fast Food.
@@ -55,6 +61,52 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
+interface ParsedForm {
+  image?: { buffer: Buffer; mimeType: string }[];
+  language?: string[];
+  cuisineType?: string[];
+}
+
+function parseMultipart(event: {
+  body: string | null;
+  isBase64Encoded?: boolean;
+  headers: Record<string, string>;
+}): Promise<ParsedForm> {
+  return new Promise((resolve, reject) => {
+    const result: ParsedForm = {};
+    const rawBody = event.body
+      ? event.isBase64Encoded
+        ? Buffer.from(event.body, "base64")
+        : Buffer.from(event.body, "utf8")
+      : Buffer.alloc(0);
+
+    const contentType = event.headers["content-type"] || event.headers["Content-Type"] || "";
+    const bb = busboy({ headers: { "content-type": contentType } });
+
+    bb.on("file", (name, file, info) => {
+      const chunks: Buffer[] = [];
+      const { mimeType } = info;
+      file.on("data", (chunk: Buffer) => chunks.push(chunk));
+      file.on("end", () => {
+        if (name === "image") {
+          result.image = result.image || [];
+          result.image.push({ buffer: Buffer.concat(chunks), mimeType: mimeType || "image/jpeg" });
+        }
+      });
+    });
+
+    bb.on("field", (name, value) => {
+      if (name === "language") result.language = [value];
+      if (name === "cuisineType") result.cuisineType = [value];
+    });
+
+    bb.on("error", reject);
+    bb.on("finish", () => resolve(result));
+    bb.write(rawBody);
+    bb.end();
+  });
+}
+
 export const handler: Handler = async (event) => {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: corsHeaders, body: "" };
@@ -69,19 +121,30 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const body = JSON.parse(event.body || "{}");
-    const { ingredients, cuisineType, language } = body;
-    if (!Array.isArray(ingredients) || ingredients.length === 0) {
-      return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: "ingredients array is required" }) };
+    const parsed = await parseMultipart(event);
+    const imageEntry = parsed.image?.[0];
+    if (!imageEntry) {
+      return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: "No image uploaded" }) };
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-    const prompt = `Generate a ${cuisineType || "Middle Eastern"} recipe using these ingredients: ${ingredients.join(", ")}. 
-    The response must be in ${language === "ar" ? "Arabic" : "English"}.`;
+    const language = parsed.language?.[0] || "en";
+    const cuisineType = parsed.cuisineType?.[0] || "Middle Eastern";
+    const base64Image = imageEntry.buffer.toString("base64");
 
+    const prompt = `Analyze this image to detect food ingredients. Then, generate a ${cuisineType} recipe using these detected ingredients. The response must be in ${language === "ar" ? "Arabic" : "English"}. Include the detected ingredients in the 'detectedIngredients' field.`;
+
+    const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: prompt,
+      contents: [
+        { text: prompt },
+        {
+          inlineData: {
+            mimeType: imageEntry.mimeType,
+            data: base64Image,
+          },
+        },
+      ],
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
@@ -102,10 +165,10 @@ export const handler: Handler = async (event) => {
     } catch {
       // keep message as raw
     }
-    if (message.includes("expired") || message.includes("renew") || message.includes("leaked") || message.includes("API key") || message.includes("INVALID")) {
-      message = "API key expired or invalid. Create a new key at Google AI Studio (aistudio.google.com/apikey), set GEMINI_API_KEY in Netlify Environment variables, then redeploy.";
+    if (message.includes("expired") || message.includes("renew") || message.includes("leaked") || message.includes("API key") || message.includes("INVALID") || message.includes("referer")) {
+      message = "API key issue. Check Google AI Studio and Netlify GEMINI_API_KEY, then redeploy.";
     }
-    console.error("generate-recipe error:", err);
+    console.error("analyze-image error:", err);
     return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: message }) };
   }
 };

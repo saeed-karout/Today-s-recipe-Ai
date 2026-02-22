@@ -1,0 +1,16 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api/generate-recipe"
+  to = "/.netlify/functions/generate-recipe"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/analyze-image"
+  to = "/.netlify/functions/analyze-image"
+  status = 200
+  force = true

@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import type { Handler } from "@netlify/functions";
+
+type Handler = (event: { httpMethod: string; body: string | null; headers: Record<string, string> }) => Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
 
 const SYSTEM_INSTRUCTION = `
 You are a professional chef specializing ONLY in Middle Eastern and Western Fast Food.

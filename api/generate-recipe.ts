@@ -1,11 +1,6 @@
-import { GoogleGenAI } from "@google/genai";
+// api/generate-recipe.ts
 
-// تعريف الأنواع
-type Handler = (event: { 
-  httpMethod: string; 
-  body: string | null; 
-  headers: Record<string, string> 
-}) => Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
+import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from "@google/generative-ai";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,137 +8,103 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
-// SYSTEM_INSTRUCTION مبسطة للاختبار
 const SYSTEM_INSTRUCTION = `
-You are a professional chef specializing in Middle Eastern and Western Fast Food.
-Respond in JSON format.
+You are a professional chef specializing ONLY in Middle Eastern and Western Fast Food.
+STRICT RULES:
+1. ONLY provide recipes from these cuisines:
+   - Middle Eastern: Syrian, Lebanese, Iraqi, Palestinian, Egyptian, Jordanian, Saudi, Yemeni, Gulf.
+   - Western Fast Food: Burgers, Pizza, Crispy Chicken, Pasta, Sandwiches.
+2. ABSOLUTELY FORBIDDEN: Any Asian cuisines (Korean, Japanese, Chinese, Thai, Vietnamese, etc.), Turkish cuisine, or any other cuisine not mentioned above.
+3. If the user asks for a forbidden cuisine, politely refuse and explain that you only specialize in Middle Eastern and Western Fast Food.
+4. Use few-shot learning examples for quality:
+   - Maqluba (Palestine/Syria/Lebanon): Rice with chicken/meat, eggplant, cauliflower.
+   - Kibbeh (Syria/Lebanon/Iraq): Bulgur balls stuffed with meat and pine nuts.
+   - Freekeh (Syria/Palestine/Jordan): Green wheat with meat/chicken.
+   - Mandi (Yemen/Saudi): Rice with smoked meat/chicken.
+   - Kabsa (Saudi/Gulf): Long rice with meat/chicken and spices.
+5. Always respond in the language requested (Arabic or English).
+6. Output MUST be in valid JSON format.
 `;
 
-export const handler: Handler = async (event) => {
-  // معالجة CORS preflight
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: corsHeaders, body: "" };
-  }
-  
-  // السماح فقط بـ POST
-  if (event.httpMethod !== "POST") {
-    return { 
-      statusCode: 405, 
-      headers: corsHeaders, 
-      body: JSON.stringify({ error: "Method not allowed. Use POST." }) 
-    };
+export const config = { maxDuration: 60 }; // مهم لـ Pro plan، Hobby محدود ~10-30s
+
+export default async function handler(req, res) {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    return res.status(204).end();
   }
 
-  // التحقق من مفتاح API
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return { 
-      statusCode: 500, 
-      headers: corsHeaders, 
-      body: JSON.stringify({ error: "GEMINI_API_KEY is not set in environment variables" }) 
-    };
+    return res.status(500).json({ error: "GEMINI_API_KEY is not set in Vercel Environment Variables" });
   }
 
   try {
-    // قراءة body الطلب
-    const body = JSON.parse(event.body || "{}");
+    const body = await req.json();
     const { ingredients, cuisineType = "Middle Eastern", language = "en" } = body;
-    
-    // التحقق من وجود المكونات
+
     if (!Array.isArray(ingredients) || ingredients.length === 0) {
-      return { 
-        statusCode: 400, 
-        headers: corsHeaders, 
-        body: JSON.stringify({ error: "ingredients array is required" }) 
-      };
+      return res.status(400).json({ error: "ingredients array is required and must not be empty" });
     }
 
-    console.log("🔄 Generating recipe with:", { ingredients, cuisineType, language });
-
-    // تهيئة Gemini
-    const ai = new GoogleGenAI({ apiKey });
-    
-    // بناء prompt
-    const prompt = `
-    ${SYSTEM_INSTRUCTION}
-    
-    Generate a ${cuisineType} recipe using these ingredients: ${ingredients.join(", ")}.
-    The response must be in ${language === "ar" ? "Arabic" : "English"}.
-    
-    Return a valid JSON object with this exact structure:
-    {
-      "recipeName": "Name of the recipe",
-      "origin": "Country of origin",
-      "cuisineType": "${cuisineType}",
-      "prepTime": "Preparation time",
-      "cookTime": "Cooking time",
-      "difficulty": "Easy/Medium/Hard",
-      "ingredients": ["list", "of", "ingredients", "with", "quantities"],
-      "instructions": ["step 1", "step 2"],
-      "chefTips": "Optional tip"
-    }
-    `;
-
-    // استدعاء Gemini بدون responseSchema المعقد
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview", // اسم النموذج الذي تريده
-      contents: prompt,
-      config: {
-        temperature: 0.3,
-        maxOutputTokens: 4096,
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",  // مستقر وسريع، تجنب preview إلا إذا كنت تحتاج ميزة جديدة
+      safetySettings: [
+        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        // أضف باقي الفئات إذا أردت
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.4,
+        maxOutputTokens: 2048,
       },
+      systemInstruction: SYSTEM_INSTRUCTION,
     });
 
-    // التحقق من وجود رد
-    if (!response || !response.text) {
-      throw new Error("Empty response from Gemini API");
+    const prompt = `
+Generate a ${cuisineType} recipe using these ingredients: ${ingredients.join(", ")}.
+The response must be in ${language === "ar" ? "Arabic" : "English"}.
+Return ONLY valid JSON matching this schema:
+{
+  "recipeName": string,
+  "origin": string,
+  "cuisineType": "${cuisineType}",
+  "prepTime": string,
+  "cookTime": string,
+  "difficulty": "Easy" | "Medium" | "Hard",
+  "ingredients": string[],  // with quantities
+  "instructions": string[],
+  "chefTips": string | null,
+  "detectedIngredients": string[] | null
+}
+`;
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+
+    let recipeJson;
+    try {
+      recipeJson = JSON.parse(responseText);
+    } catch (parseErr) {
+      console.error("JSON parse failed:", parseErr, "Raw:", responseText);
+      return res.status(500).json({ error: "Failed to parse Gemini response as JSON" });
     }
 
-    // استخراج JSON من الرد (قد يكون محاطاً بعلامات Markdown)
-    let text = response.text;
-    const jsonMatch = text.match(/```(?:json)?\n([\s\S]*?)\n```/) || 
-                      text.match(/{[\s\S]*}/);
-    
-    if (jsonMatch) {
-      text = jsonMatch[1] || jsonMatch[0];
-    }
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(200).json(recipeJson);
 
-    // تحويل النص إلى JSON
-    const recipeJson = JSON.parse(text.trim());
-    
-    return { 
-      statusCode: 200, 
-      headers: corsHeaders, 
-      body: JSON.stringify(recipeJson) 
-    };
+  } catch (err) {
+    console.error("Full error in generate-recipe:", err);
+    const errorMsg = err.message?.includes("API key") 
+      ? "Invalid or missing GEMINI_API_KEY – check Vercel env vars"
+      : err.message || "Internal server error during Gemini call";
 
-  } catch (err: unknown) {
-    // تسجيل الخطأ بالكامل للتصحيح
-    console.error("🔴 Full error:", err);
-    
-    // استخراج رسالة الخطأ
-    let errorMessage = "Unknown error occurred";
-    if (err instanceof Error) {
-      errorMessage = err.message;
-      
-      // محاولة استخراج تفاصيل أكثر من أخطاء Gemini
-      try {
-        const parsed = JSON.parse(err.message);
-        if (parsed.error?.message) {
-          errorMessage = parsed.error.message;
-        }
-      } catch {
-        // ليس JSON، نستخدم الرسالة كما هي
-      }
-    }
-    
-    return { 
-      statusCode: 500, 
-      headers: corsHeaders, 
-      body: JSON.stringify({ 
-        error: errorMessage,
-        details: err instanceof Error ? err.toString() : String(err)
-      }) 
-    };
+    return res.status(500).json({ error: errorMsg });
   }
-};
+}

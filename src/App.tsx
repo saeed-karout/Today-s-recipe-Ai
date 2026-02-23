@@ -145,27 +145,27 @@ export default function App() {
   };
 
   /** Resize/compress image in browser to avoid mobile upload size limits (e.g. Netlify 6MB). */
-  const compressImageForUpload = (file: File, maxEdge = 1024, targetSize = 1_200_000): Promise<File> => {
+  const compressImageForUpload = (file: File, maxEdge = 600, targetSize = 800_000): Promise<File> => {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         let w = img.width, h = img.height;
         if (w > maxEdge || h > maxEdge) {
           if (w > h) { h = Math.round(h * maxEdge / w); w = maxEdge; }
-          else       { w = Math.round(w * maxEdge / h); h = maxEdge; }
+          else { w = Math.round(w * maxEdge / h); h = maxEdge; }
         }
         const canvas = document.createElement("canvas");
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext("2d");
         ctx?.drawImage(img, 0, 0, w, h);
   
-        let quality = 0.92;
+        let quality = 0.85;
         const compress = () => {
           canvas.toBlob(blob => {
-            if (!blob || (blob.size <= targetSize || quality <= 0.58)) {
+            if (!blob || (blob.size <= targetSize || quality <= 0.5)) {
               resolve(new File([blob!], "compressed.jpg", { type: "image/jpeg" }));
             } else {
-              quality -= 0.12;
+              quality -= 0.1;
               compress();
             }
           }, "image/jpeg", quality);
@@ -207,11 +207,11 @@ export default function App() {
     }
   
     // تحذير حجم قبل الضغط
-    if (image.size > 4 * 1024 * 1024) {
+    if (image.size > 4 * 1024 * 1024) {  // 4 MB
       setError(
-        lang === "ar"
-          ? "الصورة كبيرة جدًا (>4 ميغابايت). جرب صورة أصغر أو اضغطها بتطبيق خارجي."
-          : "Image too large (>4MB). Try smaller photo or compress externally."
+        lang === 'ar'
+          ? 'حجم الصورة كبير جدًا (أكبر من 4 ميجابايت). التقط صورة أصغر أو اضغطها أولاً.'
+          : 'Image too large (>4MB). Take smaller photo or compress it first.'
       );
       return;
     }
@@ -220,7 +220,7 @@ export default function App() {
     setError(null);
   
     try {
-      const compressed = await compressImageForUpload(image, 1024, 1200000); // max 1.2MB
+      const compressed = await compressImageForUpload(image, 600, 800000);
   
       const formData = new FormData();
       formData.append("image", compressed, "image.jpg");

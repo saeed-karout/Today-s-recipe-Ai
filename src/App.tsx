@@ -145,58 +145,34 @@ export default function App() {
   };
 
   /** Resize/compress image in browser to avoid mobile upload size limits (e.g. Netlify 6MB). */
-  const compressImageForUpload = (file: File, maxEdge = 1200, maxSizeBytes = 1.8 * 1024 * 1024): Promise<File> => {
-    return new Promise((resolve, reject) => {
+  const compressImageForUpload = (file: File, maxEdge = 1024, targetSize = 1_200_000): Promise<File> => {
+    return new Promise((resolve) => {
       const img = new Image();
-      const url = URL.createObjectURL(file);
       img.onload = () => {
-        URL.revokeObjectURL(url);
-        const w = img.naturalWidth;
-        const h = img.naturalHeight;
-        let width = w;
-        let height = h;
+        let w = img.width, h = img.height;
         if (w > maxEdge || h > maxEdge) {
-          if (w >= h) {
-            width = maxEdge;
-            height = Math.round((h * maxEdge) / w);
-          } else {
-            height = maxEdge;
-            width = Math.round((w * maxEdge) / h);
-          }
+          if (w > h) { h = Math.round(h * maxEdge / w); w = maxEdge; }
+          else       { w = Math.round(w * maxEdge / h); h = maxEdge; }
         }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(file);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        const tryQuality = (q: number) => {
-          canvas.toBlob(
-            (blob) => {
-              if (!blob) {
-                resolve(file);
-                return;
-              }
-              if (blob.size <= maxSizeBytes || q <= 0.5) {
-                resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
-                return;
-              }
-              tryQuality(Math.max(0.5, q - 0.15));
-            },
-            'image/jpeg',
-            q
-          );
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(img, 0, 0, w, h);
+  
+        let quality = 0.92;
+        const compress = () => {
+          canvas.toBlob(blob => {
+            if (!blob || (blob.size <= targetSize || quality <= 0.58)) {
+              resolve(new File([blob!], "compressed.jpg", { type: "image/jpeg" }));
+            } else {
+              quality -= 0.12;
+              compress();
+            }
+          }, "image/jpeg", quality);
         };
-        tryQuality(0.88);
+        compress();
       };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve(file);
-      };
-      img.src = url;
+      img.src = URL.createObjectURL(file);
     });
   };
 
@@ -229,49 +205,61 @@ export default function App() {
       setError(t.noImage);
       return;
     }
+  
+    // تحذير حجم قبل الضغط
+    if (image.size > 4 * 1024 * 1024) {
+      setError(
+        lang === "ar"
+          ? "الصورة كبيرة جدًا (>4 ميغابايت). جرب صورة أصغر أو اضغطها بتطبيق خارجي."
+          : "Image too large (>4MB). Try smaller photo or compress externally."
+      );
+      return;
+    }
+  
     setLoading(true);
     setError(null);
-    setRecipe(null);
+  
     try {
-      const fileToSend = await compressImageForUpload(image);
+      const compressed = await compressImageForUpload(image, 1024, 1200000); // max 1.2MB
+  
       const formData = new FormData();
-      formData.append('image', fileToSend);
-      formData.append('language', lang);
-      formData.append('cuisineType', cuisine);
-
-      const response = await fetch('/api/analyze-image', {
-        method: 'POST',
+      formData.append("image", compressed, "image.jpg");
+      formData.append("language", lang);
+      formData.append("cuisineType", cuisine);
+  
+      const response = await fetch("/api/analyze-image", {
+        method: "POST",
         body: formData,
       });
-      const raw = await response.text();
+  
+      const rawText = await response.text();
+  
       if (!response.ok) {
-        if (raw.trimStart().startsWith('<')) {
-          setError(lang === 'ar' ? 'فشل الرفع. جرّب صورة أصغر أو اتصالاً أفضل.' : 'Upload failed. Try a smaller image or better connection.');
-          return;
+        let errMsg = response.statusText;
+        if (rawText.includes("413") || rawText.includes("Payload Too Large")) {
+          errMsg = lang === "ar"
+            ? "حجم الصورة تجاوز الحد المسموح (Vercel ≈4.5MB)"
+            : "Image size exceeds Vercel limit (~4.5MB)";
+        } else if (rawText.trim().startsWith("<")) {
+          errMsg = lang === "ar" ? "خطأ خادم (HTML)" : "Server error (HTML response)";
+        } else {
+          try {
+            const errJson = JSON.parse(rawText);
+            errMsg = errJson.error || errMsg;
+          } catch {}
         }
-        let msg = response.statusText || `Error ${response.status}`;
-        try {
-          const errBody = raw ? JSON.parse(raw) : {};
-          if (errBody.error) msg = errBody.error;
-        } catch {
-          if (raw) msg = raw.slice(0, 150);
-        }
-        throw new Error(msg);
+        throw new Error(errMsg);
       }
-      let data: Record<string, unknown>;
-      try {
-        data = raw ? JSON.parse(raw) : {};
-      } catch {
-        setError(lang === 'ar' ? 'استجابة غير متوقعة. جرّب صورة أصغر.' : 'Unexpected response. Try a smaller image.');
-        return;
+  
+      const data = JSON.parse(rawText);
+      if (data.error) throw new Error(data.error);
+  
+      setRecipe(data);
+      if (data.detectedIngredients?.length) {
+        setIngredients(prev => [...new Set([...prev, ...data.detectedIngredients])]);
       }
-      if (data.error) throw new Error(String(data.error));
-      setRecipe(data as unknown as Recipe);
-      if (Array.isArray(data.detectedIngredients)) {
-        setIngredients(prev => [...new Set([...prev, ...(data.detectedIngredients as string[])])]);
-      }
-    } catch (err: any) {
-      setError(err?.message || String(err));
+    } catch (err) {
+      setError(err.message || String(err));
     } finally {
       setLoading(false);
     }

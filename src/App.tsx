@@ -16,6 +16,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { upload } from '@vercel/blob/client';  // ← Correct import for client uploads
 
 type Language = 'ar' | 'en';
 
@@ -144,7 +145,6 @@ export default function App() {
     }
   };
 
-  /** Resize/compress image in browser to avoid mobile upload size limits (e.g. Netlify 6MB). */
   const compressImageForUpload = (file: File, maxEdge = 600, targetSize = 800_000): Promise<File> => {
     return new Promise((resolve) => {
       const img = new Image();
@@ -158,7 +158,7 @@ export default function App() {
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext("2d");
         ctx?.drawImage(img, 0, 0, w, h);
-  
+
         let quality = 0.85;
         const compress = () => {
           canvas.toBlob(blob => {
@@ -205,41 +205,56 @@ export default function App() {
       setError(t.noImage);
       return;
     }
-  
-    // تحذير حجم قبل الضغط
-    if (image.size > 4 * 1024 * 1024) {  // 4 MB
+
+    const originalSizeMB = image.size / 1024 / 1024;
+    console.log('Original image size:', originalSizeMB.toFixed(2), 'MB');
+
+    if (originalSizeMB > 5) {
       setError(
         lang === 'ar'
-          ? 'حجم الصورة كبير جدًا (أكبر من 4 ميجابايت). التقط صورة أصغر أو اضغطها أولاً.'
-          : 'Image too large (>4MB). Take smaller photo or compress it first.'
+          ? `حجم الصورة كبير جدًا (${originalSizeMB.toFixed(1)} ميجابايت). الحد الآمن ~4-5 ميجابايت. جرب صورة أصغر أو اضبط جودة الكاميرا.`
+          : `Image too large (${originalSizeMB.toFixed(1)} MB). Safe limit ~4-5 MB. Try smaller photo or lower camera quality.`
       );
       return;
     }
-  
+
     setLoading(true);
     setError(null);
-  
+    setRecipe(null);
+
     try {
       const compressed = await compressImageForUpload(image, 600, 800000);
-  
-      const formData = new FormData();
-      formData.append("image", compressed, "image.jpg");
-      formData.append("language", lang);
-      formData.append("cuisineType", cuisine);
-  
+
+      const compressedSizeMB = compressed.size / 1024 / 1024;
+      console.log('Compressed size:', compressedSizeMB.toFixed(2), 'MB');
+
+      // Direct upload to Vercel Blob (no function body limit issue)
+      const newBlob = await upload(compressed.name, compressed, {
+        access: 'public', // 'private' if you need signed URLs later
+        // handleUploadUrl: '/api/upload-token' // optional secure route, skip for now
+      });
+
+      console.log('Uploaded Blob URL:', newBlob.url);
+
+      // Send only URL to analyze function
       const response = await fetch("/api/analyze-image", {
         method: "POST",
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageUrl: newBlob.url,
+          language: lang,
+          cuisineType: cuisine,
+        }),
       });
-  
+
       const rawText = await response.text();
-  
+
       if (!response.ok) {
         let errMsg = response.statusText;
         if (rawText.includes("413") || rawText.includes("Payload Too Large")) {
           errMsg = lang === "ar"
-            ? "حجم الصورة تجاوز الحد المسموح (Vercel ≈4.5MB)"
-            : "Image size exceeds Vercel limit (~4.5MB)";
+            ? "حجم الطلب كبير (حد Vercel ≈4.5MB)"
+            : "Request payload too large (Vercel limit ~4.5MB)";
         } else if (rawText.trim().startsWith("<")) {
           errMsg = lang === "ar" ? "خطأ خادم (HTML)" : "Server error (HTML response)";
         } else {
@@ -250,21 +265,23 @@ export default function App() {
         }
         throw new Error(errMsg);
       }
-  
+
       const data = JSON.parse(rawText);
       if (data.error) throw new Error(data.error);
-  
+
       setRecipe(data);
       if (data.detectedIngredients?.length) {
         setIngredients(prev => [...new Set([...prev, ...data.detectedIngredients])]);
       }
-    } catch (err) {
-      setError(err.message || String(err));
+    } catch (err: any) {
+      console.error('Analyze image error:', err);
+      setError(err.message || (lang === 'ar' ? 'فشل رفع أو تحليل الصورة. جرب صورة أصغر.' : 'Failed to upload or analyze image. Try smaller image.'));
     } finally {
       setLoading(false);
     }
   };
 
+  // ... the rest of your JSX return statement remains unchanged
   return (
     <div className="min-min-h-screen bg-gradient-to-br from-[#667eea] to-[#f093fb] text-slate-900 font-sans selection:bg-pink-200">
       {/* Animated Background Elements */}

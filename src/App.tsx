@@ -13,10 +13,8 @@ import {
   Loader2,
   UtensilsCrossed,
   Image as ImageIcon,
-  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { upload } from '@vercel/blob/client'; // للرفع المباشر من المتصفح
 
 type Language = 'ar' | 'en';
 
@@ -65,6 +63,12 @@ const translations = {
     errorTitle: 'عذراً، حدث خطأ',
     noIngredients: 'يرجى إضافة مكونات أولاً',
     noImage: 'يرجى اختيار صورة أولاً',
+    trialVersion: 'نسخة تجريبية - 20 طلب/يوم',
+    quotaExceeded: 'لقد استنفدت حصتك اليومية من الطلبات (20 طلب)',
+    waitTime: 'وقت الانتظار المتبقي',
+    resetAtMidnight: 'سيتم إعادة تعيين العداد في منتصف الليل',
+    tryDifferent: 'جرّب استخدام مكونات مختلفة أو انتظر حتى الغد',
+    gotIt: 'حسناً',
   },
   en: {
     title: '🧑‍🍳 East & West Kitchen',
@@ -97,7 +101,113 @@ const translations = {
     errorTitle: 'Sorry, an error occurred',
     noIngredients: 'Please add ingredients first',
     noImage: 'Please select an image first',
+    trialVersion: 'Trial Version - 20 requests/day',
+    quotaExceeded: 'You\'ve exceeded your daily quota (20 requests)',
+    waitTime: 'Time remaining',
+    resetAtMidnight: 'Counter resets at midnight',
+    tryDifferent: 'Try different ingredients or wait until tomorrow',
+    gotIt: 'Got it',
   }
+};
+
+// مكون منفصل لرسالة الحصة
+const QuotaMessage = ({ 
+  onClose, 
+  retrySeconds = 60, 
+  lang = 'ar' 
+}: { 
+  onClose: () => void; 
+  retrySeconds?: number; 
+  lang: Language;
+}) => {
+  const [timeLeft, setTimeLeft] = useState(retrySeconds);
+  const t = translations[lang];
+
+  useEffect(() => {
+    setTimeLeft(retrySeconds);
+  }, [retrySeconds]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 0) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.9, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.9, y: 20 }}
+        className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* خلفية متحركة */}
+        <div className="absolute inset-0 bg-gradient-to-br from-amber-400/20 to-orange-500/20 animate-pulse" />
+        
+        <div className="relative z-10">
+          {/* أيقونة */}
+          <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-amber-500 to-orange-600 rounded-3xl flex items-center justify-center shadow-lg">
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+
+          {/* عنوان */}
+          <h2 className="text-2xl font-bold text-center mb-2 bg-gradient-to-r from-amber-600 to-orange-600 bg-clip-text text-transparent">
+            {lang === 'ar' ? '🧪 نسخة تجريبية' : '🧪 Trial Version'}
+          </h2>
+
+          {/* رسالة */}
+          <div className="text-center mb-6 text-gray-600">
+            <p className="mb-2">{t.quotaExceeded}</p>
+            <p className="text-sm">{t.tryDifferent}</p>
+          </div>
+
+          {/* مؤقت */}
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl p-6 mb-6 border border-amber-200">
+            <p className="text-center text-sm text-amber-700 mb-2">
+              {t.waitTime}
+            </p>
+            <div className="text-4xl font-mono font-bold text-center text-amber-800">
+              {formatTime(timeLeft)}
+            </div>
+            <p className="text-center text-xs text-amber-600 mt-2">
+              {t.resetAtMidnight}
+            </p>
+          </div>
+
+          {/* زر الإغلاق */}
+          <button
+            onClick={onClose}
+            className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 active:scale-95 shadow-lg"
+          >
+            {t.gotIt}
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
 };
 
 export default function App() {
@@ -110,6 +220,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showQuotaMessage, setShowQuotaMessage] = useState(false);
+  const [quotaRetrySeconds, setQuotaRetrySeconds] = useState(60);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const t = translations[lang];
@@ -184,16 +296,30 @@ export default function App() {
     setLoading(true);
     setError(null);
     setRecipe(null);
+    setShowQuotaMessage(false);
+    
     try {
       const response = await fetch('/api/generate-recipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ingredients, cuisineType: cuisine, language: lang }),
       });
+      
       const data = await response.json();
-      if (data.error) throw new Error(data.error);
+      
+      if (!response.ok) {
+        if (response.status === 429) {
+          const retryAfter = data.retryAfter || 60;
+          setQuotaRetrySeconds(retryAfter);
+          setShowQuotaMessage(true);
+          return;
+        }
+        throw new Error(data.error || 'Failed to generate recipe');
+      }
+      
       setRecipe(data);
     } catch (err: any) {
+      console.error('Generate error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -205,84 +331,61 @@ export default function App() {
       setError(t.noImage);
       return;
     }
-
-    const originalSizeMB = image.size / 1024 / 1024;
-    console.log('Original image size:', originalSizeMB.toFixed(2), 'MB');
-
-    if (originalSizeMB > 5) {
-      setError(
-        lang === 'ar'
-          ? `حجم الصورة كبير جدًا (${originalSizeMB.toFixed(1)} ميجابايت). جرب صورة أصغر أو اضبط جودة الكاميرا.`
-          : `Image too large (${originalSizeMB.toFixed(1)} MB). Try smaller photo or lower camera quality.`
-      );
-      return;
-    }
-
+  
     setLoading(true);
     setError(null);
     setRecipe(null);
-
+    setShowQuotaMessage(false);
+  
     try {
       const compressed = await compressImageForUpload(image, 600, 800000);
-
-      const compressedSizeMB = compressed.size / 1024 / 1024;
-      console.log('Compressed size:', compressedSizeMB.toFixed(2), 'MB');
-
-      // رفع مباشر إلى Vercel Blob (بدون مرور بالدالة → لا حد حجم)
-      const blob = await upload(compressed.name, compressed, {
-        access: 'public', // يعطي رابط عام مباشر
-        handleUploadUrl: '/api/upload-token', // ملف توليد token
+      
+      // تحويل الصورة إلى Base64
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(compressed);
       });
-
-      console.log('Uploaded Blob URL:', blob.url);
-
-      // إرسال الرابط فقط إلى الدالة (طلب صغير جدًا)
-      const response = await fetch("/api/analyze-image", {
-        method: "POST",
+      
+      const base64Image = await base64Promise;
+      
+      // إرسال Base64 مباشرة للتحليل (بدون رفع لـ Vercel Blob)
+      const response = await fetch('/api/analyze-image-base64', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageUrl: blob.url,
+          image: base64Image,
           language: lang,
           cuisineType: cuisine,
         }),
       });
-
-      const rawText = await response.text();
-
+  
+      const data = await response.json();
+  
       if (!response.ok) {
-        let errMsg = response.statusText;
-        if (rawText.includes("413") || rawText.includes("Payload Too Large")) {
-          errMsg = lang === "ar"
-            ? "حجم الطلب كبير (حد Vercel ≈4.5MB)"
-            : "Request payload too large (Vercel limit ~4.5MB)";
-        } else if (rawText.trim().startsWith("<")) {
-          errMsg = lang === "ar" ? "خطأ خادم (HTML)" : "Server error (HTML response)";
-        } else {
-          try {
-            const errJson = JSON.parse(rawText);
-            errMsg = errJson.error || errMsg;
-          } catch {}
+        if (response.status === 429) {
+          const retryAfter = data.retryAfter || 60;
+          setQuotaRetrySeconds(retryAfter);
+          setShowQuotaMessage(true);
+          return;
         }
-        throw new Error(errMsg);
+        throw new Error(data.error || 'Failed to analyze image');
       }
-
-      const data = JSON.parse(rawText);
-      if (data.error) throw new Error(data.error);
-
+  
       setRecipe(data);
       if (data.detectedIngredients?.length) {
         setIngredients(prev => [...new Set([...prev, ...data.detectedIngredients])]);
       }
     } catch (err: any) {
       console.error('Analyze image error:', err);
-      setError(err.message || (lang === 'ar' ? 'فشل رفع أو تحليل الصورة. جرب صورة أصغر.' : 'Failed to upload or analyze image. Try smaller image.'));
+      setError(err.message || (lang === 'ar' ? 'فشل تحليل الصورة.' : 'Failed to analyze image.'));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-min-h-screen bg-gradient-to-br from-[#667eea] to-[#f093fb] text-slate-900 font-sans selection:bg-pink-200">
+    <div className="min-h-screen bg-gradient-to-br from-[#667eea] to-[#f093fb] text-slate-900 font-sans selection:bg-pink-200">
       {/* Animated Background Elements */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-white/10 rounded-full blur-3xl animate-pulse" />
@@ -290,8 +393,18 @@ export default function App() {
       </div>
 
       <div className="relative z-10 max-w-4xl mx-auto px-4 py-8 md:py-12">
-        {/* Header */}
+        {/* Header مع مؤشر النسخة التجريبية */}
         <header className="text-center mb-12">
+          <div className="flex justify-center mb-4">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/20 backdrop-blur-sm border border-amber-500/30 rounded-full text-amber-100 text-xs">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+              {t.trialVersion}
+            </div>
+          </div>
+          
           <motion.div
             initial={{ y: -20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
@@ -350,6 +463,7 @@ export default function App() {
                 ref={fileInputRef}
                 onChange={handleImageChange}
                 accept="image/*"
+                capture="environment"
                 className="hidden"
               />
 
@@ -456,7 +570,7 @@ export default function App() {
 
           {/* Error Message */}
           <AnimatePresence>
-            {error && (
+            {error && !showQuotaMessage && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -607,6 +721,17 @@ export default function App() {
           <p>© {new Date().getFullYear()} {t.title}</p>
         </footer>
       </div>
+
+      {/* Quota Message Modal */}
+      <AnimatePresence>
+        {showQuotaMessage && (
+          <QuotaMessage 
+            onClose={() => setShowQuotaMessage(false)} 
+            retrySeconds={quotaRetrySeconds}
+            lang={lang}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,36 +1,32 @@
 // api/upload-token.ts
-// هذا الـ route يولد token للـ client upload – لا تستخدم Edge هنا
-
 import { handleUpload, type HandleUploadBody } from '@vercel/blob';
 
 export const config = {
-  runtime: 'nodejs', // مهم: Node.js بدل Edge لدعم undici/stream
+  runtime: 'nodejs',
 };
 
-export default async function POST(req: Request) {
-  const body = (await req.json()) as HandleUploadBody;
+export default async function POST(request: Request) {
+  const body = (await request.json()) as HandleUploadBody;
 
   try {
     const jsonResponse = await handleUpload({
       body,
-      request: req,
+      request,
       onBeforeGenerateToken: async (pathname) => {
-        // يمكنك إضافة auth هنا لاحقًا (مثل check user logged in)
         return {
           allowedContentTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic'],
-          maximumSizeInBytes: 50 * 1024 * 1024, // 50 MB max للصور
-          addRandomSuffix: true, // يضيف suffix عشوائي لتجنب overwrite
-          // tokenPayload: JSON.stringify({ userId: '123' }) // اختياري
+          maximumSizeInBytes: 10 * 1024 * 1024, // 10 MB max
+          tokenPayload: JSON.stringify({}),
         };
       },
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        console.log('Upload completed:', blob.url, tokenPayload);
-        // هنا يمكنك حفظ الـ url في DB أو إرسال إشعار
+        console.log('Upload completed:', blob.url);
       },
     });
 
     return Response.json(jsonResponse);
   } catch (error) {
+    console.error('Upload token error:', error);
     return Response.json(
       { error: (error as Error).message },
       { status: 500 },

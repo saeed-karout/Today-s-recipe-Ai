@@ -1,13 +1,16 @@
+// api/analyze-image.ts
+
 import busboy from "busboy";
 import sharp from "sharp";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";  // ← SDK الرسمي
 
-type Handler = (event: {
-  httpMethod: string;
-  body: string | null;
-  headers: Record<string, string>;
-  isBase64Encoded?: boolean;
-}) => Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
+type Handler = (req: any, res: any) => Promise<void>;
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Content-Type": "application/json",
+};
 
 const SYSTEM_INSTRUCTION = `
 You are a professional chef specializing ONLY in Middle Eastern and Western Fast Food.
@@ -26,40 +29,21 @@ STRICT RULES:
 5. Always respond in the language requested (Arabic or English).
 6. Output MUST be in valid JSON format.
 `;
-
 const RECIPE_SCHEMA = {
-  type: Type.OBJECT,
+  type: "OBJECT",
   properties: {
-    recipeName: { type: Type.STRING, description: "Name of the recipe" },
-    origin: { type: Type.STRING, description: "Country or region of origin" },
-    cuisineType: { type: Type.STRING, description: "Middle Eastern or Western Fast Food" },
-    prepTime: { type: Type.STRING, description: "Preparation time" },
-    cookTime: { type: Type.STRING, description: "Cooking time" },
-    difficulty: { type: Type.STRING, description: "Easy, Medium, or Hard" },
-    ingredients: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "List of ingredients with quantities"
-    },
-    instructions: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "Step-by-step preparation steps"
-    },
-    chefTips: { type: Type.STRING, description: "Optional tips from the chef" },
-    detectedIngredients: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "Only for image analysis: list of ingredients detected in the image"
-    }
+    recipeName: { type: "STRING" },
+    origin: { type: "STRING" },
+    cuisineType: { type: "STRING" },
+    prepTime: { type: "STRING" },
+    cookTime: { type: "STRING" },
+    difficulty: { type: "STRING" },
+    ingredients: { type: "ARRAY", items: { type: "STRING" } },
+    instructions: { type: "ARRAY", items: { type: "STRING" } },
+    chefTips: { type: "STRING" },
+    detectedIngredients: { type: "ARRAY", items: { type: "STRING" } }
   },
   required: ["recipeName", "origin", "cuisineType", "prepTime", "cookTime", "difficulty", "ingredients", "instructions"]
-};
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Content-Type": "application/json",
 };
 
 interface ParsedForm {
@@ -68,118 +52,97 @@ interface ParsedForm {
   cuisineType?: string[];
 }
 
-function parseMultipart(event: {
-  body: string | null;
-  isBase64Encoded?: boolean;
-  headers: Record<string, string>;
-}): Promise<ParsedForm> {
-  return new Promise((resolve, reject) => {
-    const result: ParsedForm = {};
-    const rawBody = event.body
-      ? event.isBase64Encoded
-        ? Buffer.from(event.body, "base64")
-        : Buffer.from(event.body, "utf8")
-      : Buffer.alloc(0);
-
-    const contentType = event.headers["content-type"] || event.headers["Content-Type"] || "";
-    const bb = busboy({ headers: { "content-type": contentType } });
-
-    bb.on("file", (name, file, info) => {
-      const chunks: Buffer[] = [];
-      const { mimeType } = info;
-      file.on("data", (chunk: Buffer) => chunks.push(chunk));
-      file.on("end", () => {
-        if (name === "image") {
-          result.image = result.image || [];
-          result.image.push({ buffer: Buffer.concat(chunks), mimeType: mimeType || "image/jpeg" });
-        }
-      });
-    });
-
-    bb.on("field", (name, value) => {
-      if (name === "language") result.language = [value];
-      if (name === "cuisineType") result.cuisineType = [value];
-    });
-
-    bb.on("error", reject);
-    bb.on("finish", () => resolve(result));
-    bb.write(rawBody);
-    bb.end();
-  });
+function isParsedForm(obj: unknown): obj is ParsedForm {
+  return obj != null && typeof obj === 'object';
 }
 
-export const handler: Handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: corsHeaders, body: "" };
+export default async function handler(req: any, res: any) {
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, corsHeaders);
+    res.end();
+    return;
   }
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: "Method not allowed" }) };
+
+  if (req.method !== "POST") {
+    res.writeHead(405, corsHeaders);
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: "GEMINI_API_KEY is not set" }) };
+    res.writeHead(500, corsHeaders);
+    res.end(JSON.stringify({ error: "GEMINI_API_KEY not set" }));
+    return;
   }
 
   try {
-    const parsed = await parseMultipart(event);
-    const imageEntry = parsed.image?.[0];
-    if (!imageEntry) {
-      return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: "No image uploaded" }) };
+    const parsedResult = await new Promise<ParsedForm>((resolve, reject) => {
+      const result: ParsedForm = {};
+      const contentType = req.headers["content-type"] || "";
+      const bb = busboy({ headers: { "content-type": contentType } });
+
+      bb.on("file", (name, file, info) => {
+        if (name !== "image") return file.resume();
+        const chunks: Buffer[] = [];
+        file.on("data", chunk => chunks.push(chunk));
+        file.on("end", () => {
+          result.image = [{ buffer: Buffer.concat(chunks), mimeType: info.mimeType || "image/jpeg" }];
+        });
+      });
+
+      bb.on("field", (name, value) => {
+        if (name === "language") result.language = [value];
+        if (name === "cuisineType") result.cuisineType = [value];
+      });
+
+      bb.on("error", reject);
+      bb.on("finish", () => resolve(result));
+
+      req.pipe(bb);
+    });
+
+    if (!isParsedForm(parsedResult) || !parsedResult.image?.[0]) {
+      res.writeHead(400, corsHeaders);
+      res.end(JSON.stringify({ error: "No image uploaded or invalid form" }));
+      return;
     }
 
-    const language = parsed.language?.[0] || "en";
-    const cuisineType = parsed.cuisineType?.[0] || "Middle Eastern";
+    const imageEntry = parsedResult.image[0];
+    const language = parsedResult.language?.[0] || "en";
+    const cuisineType = parsedResult.cuisineType?.[0] || "Middle Eastern";
 
-    // Resize/compress to stay under function timeout and reduce Gemini processing time
     const MAX_EDGE = 800;
     const resized = await sharp(imageEntry.buffer)
       .resize(MAX_EDGE, MAX_EDGE, { fit: "inside", withoutEnlargement: true })
       .jpeg({ quality: 82 })
       .toBuffer();
+
     const base64Image = resized.toString("base64");
 
     const prompt = `Analyze this image to detect food ingredients. Then, generate a ${cuisineType} recipe using these detected ingredients. The response must be in ${language === "ar" ? "Arabic" : "English"}. Include the detected ingredients in the 'detectedIngredients' field.`;
 
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
       model: "gemini-3-flash-preview",
-      contents: [
-        { text: prompt },
-        {
-          inlineData: {
-            mimeType: "image/jpeg",
-            data: base64Image,
-          },
-        },
-      ],
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
-        responseSchema: RECIPE_SCHEMA,
-      },
+      generationConfig: { responseMimeType: "application/json" },
+      systemInstruction: SYSTEM_INSTRUCTION,
     });
 
-    const text = response.text;
-    const data = text ? JSON.parse(text) : {};
-    return { statusCode: 200, headers: corsHeaders, body: JSON.stringify(data) };
-  } catch (err: unknown) {
-    const raw = err instanceof Error ? err.message : String(err);
-    let message = raw;
-    try {
-      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-      const inner = parsed?.error?.message ?? parsed?.message;
-      if (typeof inner === "string") message = inner;
-    } catch {
-      // keep message as raw
-    }
-    if (message.includes("expired") || message.includes("renew") || message.includes("leaked") || message.includes("API key") || message.includes("INVALID") || message.includes("referer")) {
-      message = "API key issue. Check Google AI Studio and Netlify GEMINI_API_KEY, then redeploy.";
-    }
-    if (message.includes("timed out") || message.includes("Timeout") || message.includes("Sandbox")) {
-      message = "Request took too long. Try a smaller image or try again.";
-    }
+    const result = await model.generateContent([
+      { text: prompt },
+      { inlineData: { mimeType: "image/jpeg", data: base64Image } }
+    ]);
+
+    const text = result.response.text();
+    const data = JSON.parse(text);  // لو فشل، أضف try-catch هنا
+
+    res.writeHead(200, corsHeaders);
+    res.end(JSON.stringify(data));
+
+  } catch (err) {
     console.error("analyze-image error:", err);
-    return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: message }) };
+    res.writeHead(500, corsHeaders);
+    res.end(JSON.stringify({ error: (err as Error).message || "Server error" }));
   }
-};
+}

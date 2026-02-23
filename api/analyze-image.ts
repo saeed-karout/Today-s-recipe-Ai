@@ -56,7 +56,7 @@ const RECIPE_SCHEMA = {
 };
 
 export const config = {
-  maxDuration: 60, // حتى 60 ثانية (مهم لمعالجة الطلبات مع Gemini)
+  maxDuration: 60,
 };
 
 export default async function handler(req: any, res: any) {
@@ -68,40 +68,29 @@ export default async function handler(req: any, res: any) {
 
   if (req.method !== "POST") {
     res.writeHead(405, corsHeaders);
-    res.end(JSON.stringify({ error: "Method not allowed. Use POST." }));
+    res.end(JSON.stringify({ error: "Method not allowed" }));
     return;
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     res.writeHead(500, corsHeaders);
-    res.end(JSON.stringify({ error: "GEMINI_API_KEY is not set in Vercel Environment Variables" }));
+    res.end(JSON.stringify({ error: "GEMINI_API_KEY is not set" }));
     return;
   }
 
   try {
-    // قراءة JSON body (الآن نتلقى imageUrl فقط)
-    let bodyRaw = "";
-    req.on("data", (chunk: Buffer) => {
-      bodyRaw += chunk.toString();
-    });
-
+    // قراءة JSON body (صغير جدًا)
+    let rawBody = "";
+    req.on("data", (chunk: Buffer) => { rawBody += chunk.toString(); });
     await new Promise((resolve) => req.on("end", resolve));
 
-    let body;
-    try {
-      body = JSON.parse(bodyRaw || "{}");
-    } catch {
-      res.writeHead(400, corsHeaders);
-      res.end(JSON.stringify({ error: "Invalid JSON in request body" }));
-      return;
-    }
-
+    const body = JSON.parse(rawBody || "{}");
     const { imageUrl, language = "en", cuisineType = "Middle Eastern" } = body;
 
     if (!imageUrl || typeof imageUrl !== "string" || !imageUrl.startsWith("https://")) {
       res.writeHead(400, corsHeaders);
-      res.end(JSON.stringify({ error: "Valid imageUrl[](https://...) is required" }));
+      res.end(JSON.stringify({ error: "Valid imageUrl[](https://...) required" }));
       return;
     }
 
@@ -118,17 +107,17 @@ export default async function handler(req: any, res: any) {
       systemInstruction: SYSTEM_INSTRUCTION,
     });
 
-    console.time("gemini-image-analysis");
+    console.time("gemini-analysis");
     const result = await model.generateContent([
       { text: prompt },
       {
         fileData: {
-          mimeType: "image/jpeg", // افتراضي jpeg، يمكن تعديله لاحقًا إذا أردت دعم png/webp
+          mimeType: "image/jpeg",
           fileUri: imageUrl
         }
       }
     ]);
-    console.timeEnd("gemini-image-analysis");
+    console.timeEnd("gemini-analysis");
 
     const responseText = result.response.text();
 
@@ -136,7 +125,7 @@ export default async function handler(req: any, res: any) {
     try {
       data = JSON.parse(responseText);
     } catch (parseErr) {
-      console.error("JSON parse error:", parseErr, "Raw:", responseText.substring(0, 200));
+      console.error("JSON parse error:", parseErr);
       const cleaned = responseText.replace(/```json\s*|\s*```/g, "").trim();
       data = JSON.parse(cleaned);
     }
@@ -145,23 +134,8 @@ export default async function handler(req: any, res: any) {
     res.end(JSON.stringify(data));
 
   } catch (err: any) {
-    console.error("analyze-image error:", {
-      message: err.message,
-      stack: err.stack?.substring(0, 500),
-      name: err.name,
-    });
-
-    let errorMessage = err.message || "Internal server error during image analysis";
-
-    if (err.message?.includes("timeout") || err.message?.includes("took too long")) {
-      errorMessage = "Request timed out. The image analysis took too long — try again or use a simpler image.";
-    } else if (err.message?.includes("not found") || err.message?.includes("404")) {
-      errorMessage = "Image URL not accessible or invalid. Make sure the URL is public and correct.";
-    } else if (err.message?.includes("API key") || err.message?.includes("authentication")) {
-      errorMessage = "Gemini API key issue. Check Vercel environment variables.";
-    }
-
+    console.error("analyze-image error:", err);
     res.writeHead(500, corsHeaders);
-    res.end(JSON.stringify({ error: errorMessage }));
+    res.end(JSON.stringify({ error: err.message || "Analysis failed" }));
   }
 }

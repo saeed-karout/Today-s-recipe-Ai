@@ -16,7 +16,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { upload } from '@vercel/blob/client';  // ← Correct import for client uploads
+import { upload } from '@vercel/blob/client'; // للرفع المباشر من المتصفح
 
 type Language = 'ar' | 'en';
 
@@ -212,8 +212,8 @@ export default function App() {
     if (originalSizeMB > 5) {
       setError(
         lang === 'ar'
-          ? `حجم الصورة كبير جدًا (${originalSizeMB.toFixed(1)} ميجابايت). الحد الآمن ~4-5 ميجابايت. جرب صورة أصغر أو اضبط جودة الكاميرا.`
-          : `Image too large (${originalSizeMB.toFixed(1)} MB). Safe limit ~4-5 MB. Try smaller photo or lower camera quality.`
+          ? `حجم الصورة كبير جدًا (${originalSizeMB.toFixed(1)} ميجابايت). جرب صورة أصغر أو اضبط جودة الكاميرا.`
+          : `Image too large (${originalSizeMB.toFixed(1)} MB). Try smaller photo or lower camera quality.`
       );
       return;
     }
@@ -228,20 +228,20 @@ export default function App() {
       const compressedSizeMB = compressed.size / 1024 / 1024;
       console.log('Compressed size:', compressedSizeMB.toFixed(2), 'MB');
 
-      // Direct upload to Vercel Blob (no function body limit issue)
-      const newBlob = await upload(compressed.name, compressed, {
-        access: 'public', // 'private' if you need signed URLs later
-        // handleUploadUrl: '/api/upload-token' // optional secure route, skip for now
+      // رفع مباشر إلى Vercel Blob (بدون مرور بالدالة → لا حد حجم)
+      const blob = await upload(compressed.name, compressed, {
+        access: 'public', // يعطي رابط عام مباشر
+        handleUploadUrl: '/api/upload-token', // ملف توليد token
       });
 
-      console.log('Uploaded Blob URL:', newBlob.url);
+      console.log('Uploaded Blob URL:', blob.url);
 
-      // Send only URL to analyze function
+      // إرسال الرابط فقط إلى الدالة (طلب صغير جدًا)
       const response = await fetch("/api/analyze-image", {
         method: "POST",
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageUrl: newBlob.url,
+          imageUrl: blob.url,
           language: lang,
           cuisineType: cuisine,
         }),
@@ -281,7 +281,6 @@ export default function App() {
     }
   };
 
-  // ... the rest of your JSX return statement remains unchanged
   return (
     <div className="min-min-h-screen bg-gradient-to-br from-[#667eea] to-[#f093fb] text-slate-900 font-sans selection:bg-pink-200">
       {/* Animated Background Elements */}

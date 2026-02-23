@@ -2,9 +2,7 @@
 
 import busboy from "busboy";
 import sharp from "sharp";
-import { GoogleGenerativeAI } from "@google/generative-ai";  // ← SDK الرسمي
-
-type Handler = (req: any, res: any) => Promise<void>;
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,19 +27,32 @@ STRICT RULES:
 5. Always respond in the language requested (Arabic or English).
 6. Output MUST be in valid JSON format.
 `;
+
 const RECIPE_SCHEMA = {
   type: "OBJECT",
   properties: {
-    recipeName: { type: "STRING" },
-    origin: { type: "STRING" },
-    cuisineType: { type: "STRING" },
-    prepTime: { type: "STRING" },
-    cookTime: { type: "STRING" },
-    difficulty: { type: "STRING" },
-    ingredients: { type: "ARRAY", items: { type: "STRING" } },
-    instructions: { type: "ARRAY", items: { type: "STRING" } },
-    chefTips: { type: "STRING" },
-    detectedIngredients: { type: "ARRAY", items: { type: "STRING" } }
+    recipeName: { type: "STRING", description: "Name of the recipe" },
+    origin: { type: "STRING", description: "Country or region of origin" },
+    cuisineType: { type: "STRING", description: "Middle Eastern or Western Fast Food" },
+    prepTime: { type: "STRING", description: "Preparation time" },
+    cookTime: { type: "STRING", description: "Cooking time" },
+    difficulty: { type: "STRING", description: "Easy, Medium, or Hard" },
+    ingredients: {
+      type: "ARRAY",
+      items: { type: "STRING" },
+      description: "List of ingredients with quantities"
+    },
+    instructions: {
+      type: "ARRAY",
+      items: { type: "STRING" },
+      description: "Step-by-step preparation steps"
+    },
+    chefTips: { type: "STRING", description: "Optional tips from the chef" },
+    detectedIngredients: {
+      type: "ARRAY",
+      items: { type: "STRING" },
+      description: "Only for image analysis: list of ingredients detected in the image"
+    }
   },
   required: ["recipeName", "origin", "cuisineType", "prepTime", "cookTime", "difficulty", "ingredients", "instructions"]
 };
@@ -52,9 +63,9 @@ interface ParsedForm {
   cuisineType?: string[];
 }
 
-function isParsedForm(obj: unknown): obj is ParsedForm {
-  return obj != null && typeof obj === 'object';
-}
+export const config = {
+  maxDuration: 60, // أعطِ الدالة حتى 60 ثانية (مهم جدًا لمعالجة الصور + Gemini)
+};
 
 export default async function handler(req: any, res: any) {
   if (req.method === "OPTIONS") {
@@ -72,22 +83,42 @@ export default async function handler(req: any, res: any) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     res.writeHead(500, corsHeaders);
-    res.end(JSON.stringify({ error: "GEMINI_API_KEY not set" }));
+    res.end(JSON.stringify({ error: "GEMINI_API_KEY is not set in Vercel Environment Variables" }));
     return;
   }
 
   try {
-    const parsedResult = await new Promise<ParsedForm>((resolve, reject) => {
+    // قراءة multipart/form-data بطريقة مستقرة
+    const parsed = await new Promise<ParsedForm>((resolve, reject) => {
       const result: ParsedForm = {};
       const contentType = req.headers["content-type"] || "";
-      const bb = busboy({ headers: { "content-type": contentType } });
 
-      bb.on("file", (name, file, info) => {
-        if (name !== "image") return file.resume();
+      if (!contentType || !contentType.includes("multipart/form-data")) {
+        reject(new Error("Invalid Content-Type, expected multipart/form-data"));
+        return;
+      }
+
+      const bb = busboy({
+        headers: { "content-type": contentType },
+        limits: {
+          fileSize: 6 * 1024 * 1024, // حد أقصى 6MB (احتياطي)
+          files: 1,
+        },
+      });
+
+      bb.on("file", (fieldname, file, info) => {
+        if (fieldname !== "image") {
+          file.resume();
+          return;
+        }
+
         const chunks: Buffer[] = [];
-        file.on("data", chunk => chunks.push(chunk));
+        file.on("data", (chunk) => chunks.push(chunk));
         file.on("end", () => {
-          result.image = [{ buffer: Buffer.concat(chunks), mimeType: info.mimeType || "image/jpeg" }];
+          result.image = [{
+            buffer: Buffer.concat(chunks),
+            mimeType: info.mimeType || "image/jpeg",
+          }];
         });
       });
 
@@ -96,53 +127,92 @@ export default async function handler(req: any, res: any) {
         if (name === "cuisineType") result.cuisineType = [value];
       });
 
-      bb.on("error", reject);
-      bb.on("finish", () => resolve(result));
+      bb.on("error", (err) => {
+        console.error("Busboy error:", err.message);
+        reject(err);
+      });
+
+      bb.on("finish", () => {
+        resolve(result);
+      });
 
       req.pipe(bb);
     });
 
-    if (!isParsedForm(parsedResult) || !parsedResult.image?.[0]) {
+    // التحقق من وجود الصورة
+    if (!parsed.image || !parsed.image[0]) {
       res.writeHead(400, corsHeaders);
-      res.end(JSON.stringify({ error: "No image uploaded or invalid form" }));
+      res.end(JSON.stringify({ error: "No image uploaded or invalid form data" }));
       return;
     }
 
-    const imageEntry = parsedResult.image[0];
-    const language = parsedResult.language?.[0] || "en";
-    const cuisineType = parsedResult.cuisineType?.[0] || "Middle Eastern";
+    const imageEntry = parsed.image[0];
+    const language = parsed.language?.[0] || "en";
+    const cuisineType = parsed.cuisineType?.[0] || "Middle Eastern";
 
-    const MAX_EDGE = 800;
-    const resized = await sharp(imageEntry.buffer)
+    // ضغط الصورة داخل الـ server (احتياطي مهم)
+    const MAX_EDGE = 768; // قيمة متوازنة بين الجودة والسرعة
+    const resizedBuffer = await sharp(imageEntry.buffer)
       .resize(MAX_EDGE, MAX_EDGE, { fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 82 })
+      .jpeg({ quality: 75 })
       .toBuffer();
 
-    const base64Image = resized.toString("base64");
+    const base64Image = resizedBuffer.toString("base64");
 
     const prompt = `Analyze this image to detect food ingredients. Then, generate a ${cuisineType} recipe using these detected ingredients. The response must be in ${language === "ar" ? "Arabic" : "English"}. Include the detected ingredients in the 'detectedIngredients' field.`;
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: "gemini-3-flash-preview",
-      generationConfig: { responseMimeType: "application/json" },
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.4,
+        maxOutputTokens: 2048,
+      },
       systemInstruction: SYSTEM_INSTRUCTION,
     });
 
+    console.time("gemini-image-call");
     const result = await model.generateContent([
       { text: prompt },
-      { inlineData: { mimeType: "image/jpeg", data: base64Image } }
+      {
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: base64Image,
+        },
+      },
     ]);
+    console.timeEnd("gemini-image-call");
 
-    const text = result.response.text();
-    const data = JSON.parse(text);  // لو فشل، أضف try-catch هنا
+    const responseText = result.response.text();
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseErr) {
+      console.error("JSON parse failed:", parseErr);
+      const cleaned = responseText.replace(/```json\s*|\s*```/g, "").trim();
+      data = JSON.parse(cleaned);
+    }
 
     res.writeHead(200, corsHeaders);
     res.end(JSON.stringify(data));
 
-  } catch (err) {
-    console.error("analyze-image error:", err);
+  } catch (err: any) {
+    console.error("analyze-image error:", {
+      message: err.message,
+      stack: err.stack?.substring(0, 500),
+      name: err.name,
+    });
+
+    const errorMessage =
+      err.message?.includes("timeout") || err.message?.includes("took too long")
+        ? "Request timed out. Try a smaller image or check your internet connection."
+        : err.message?.includes("size") || err.message?.includes("limit")
+        ? "Image or request payload too large (Vercel limit ~4.5MB). Compress more or use smaller photo."
+        : err.message || "Internal server error during image analysis";
+
     res.writeHead(500, corsHeaders);
-    res.end(JSON.stringify({ error: (err as Error).message || "Server error" }));
+    res.end(JSON.stringify({ error: errorMessage }));
   }
 }

@@ -8,7 +8,8 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
-const SYSTEM_INSTRUCTION = `You are a professional chef specializing ONLY in Middle Eastern and Western Fast Food.
+const SYSTEM_INSTRUCTION = `
+You are a professional chef specializing ONLY in Middle Eastern and Western Fast Food.
 STRICT RULES:
 1. ONLY provide recipes from these cuisines:
    - Middle Eastern: Syrian, Lebanese, Iraqi, Palestinian, Egyptian, Jordanian, Saudi, Yemeni, Gulf.
@@ -22,9 +23,11 @@ STRICT RULES:
    - Mandi (Yemen/Saudi): Rice with smoked meat/chicken.
    - Kabsa (Saudi/Gulf): Long rice with meat/chicken and spices.
 5. Always respond in the language requested (Arabic or English).
-6. Output MUST be in valid JSON format.`;
+6. Output MUST be in valid JSON format.
+`;
 
 export default async function handler(req, res) {
+  // معالجة CORS preflight
   if (req.method === "OPTIONS") {
     res.writeHead(204, corsHeaders);
     res.end();
@@ -33,31 +36,35 @@ export default async function handler(req, res) {
 
   if (req.method !== "POST") {
     res.writeHead(405, corsHeaders);
-    res.end(JSON.stringify({ error: "Method not allowed" }));
+    res.end(JSON.stringify({ error: "Method not allowed. Use POST." }));
     return;
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     res.writeHead(500, corsHeaders);
-    res.end(JSON.stringify({ error: "GEMINI_API_KEY is not set" }));
+    res.end(JSON.stringify({ error: "GEMINI_API_KEY is not set in Vercel Environment Variables" }));
     return;
   }
 
-  let bodyData;
+  // قراءة body كـ stream (الطريقة الآمنة في Node.js raw على Vercel)
+  let rawBody = "";
+  req.on("data", (chunk) => {
+    rawBody += chunk.toString();
+  });
+
+  await new Promise((resolve) => req.on("end", resolve));
+
+  let body;
   try {
-    let rawBody = "";
-    req.on("data", chunk => { rawBody += chunk; });
-    await new Promise((resolve) => req.on("end", resolve));
-
-    bodyData = JSON.parse(rawBody || "{}");
-  } catch (e) {
+    body = JSON.parse(rawBody || "{}");
+  } catch (err) {
     res.writeHead(400, corsHeaders);
-    res.end(JSON.stringify({ error: "Invalid JSON body" }));
+    res.end(JSON.stringify({ error: "Invalid JSON in request body" }));
     return;
   }
 
-  const { ingredients, cuisineType = "Middle Eastern", language = "en" } = bodyData;
+  const { ingredients, cuisineType = "Middle Eastern", language = "en" } = body;
 
   if (!Array.isArray(ingredients) || ingredients.length === 0) {
     res.writeHead(400, corsHeaders);
@@ -67,50 +74,59 @@ export default async function handler(req, res) {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
+
     const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",  // أو gemini-3-flash-preview إذا كنت متأكد أنه يعمل
+      model: "gemini-1.5-flash",  // مستقر وأفضل من preview في معظم الحالات
       generationConfig: {
         responseMimeType: "application/json",
-        temperature: 0.4,
+        temperature: 0.3,
+        maxOutputTokens: 2048,
       },
       systemInstruction: SYSTEM_INSTRUCTION,
     });
 
-    const prompt = `Generate a ${cuisineType} recipe using these ingredients: ${ingredients.join(", ")}.
+    const prompt = `
+Generate a ${cuisineType} recipe using these ingredients: ${ingredients.join(", ")}.
 The response must be in ${language === "ar" ? "Arabic" : "English"}.
-Return ONLY valid JSON with this structure:
+Return ONLY valid JSON object with this exact structure (no markdown, no extra text before or after):
 {
-  "recipeName": "string",
-  "origin": "string",
+  "recipeName": "Name of the recipe",
+  "origin": "Country or region of origin",
   "cuisineType": "${cuisineType}",
-  "prepTime": "string",
-  "cookTime": "string",
-  "difficulty": "Easy|Medium|Hard",
-  "ingredients": ["quantity + name", ...],
-  "instructions": ["step 1", "step 2", ...],
-  "chefTips": "string or null"
-}`;
+  "prepTime": "Preparation time (e.g. 20 minutes)",
+  "cookTime": "Cooking time (e.g. 45 minutes)",
+  "difficulty": "Easy" or "Medium" or "Hard",
+  "ingredients": ["1 cup rice", "500g chicken", ...],
+  "instructions": ["Step 1: ...", "Step 2: ...", ...],
+  "chefTips": "Optional tip or null"
+}
+`;
 
     const result = await model.generateContent(prompt);
-    const text = result.response.text();
+    const responseText = result.response.text();
 
-    let jsonData;
+    let recipeJson;
     try {
-      jsonData = JSON.parse(text);
-    } catch {
-      // محاولة تنظيف إذا وضع Gemini markdown
-      const cleaned = text.replace(/^```json\s*|\s*```$/g, "").trim();
-      jsonData = JSON.parse(cleaned);
+      recipeJson = JSON.parse(responseText);
+    } catch (parseErr) {
+      // تنظيف إذا أضاف Gemini ```json أو مسافات
+      const cleaned = responseText
+        .replace(/^\s*```json\s*/, "")
+        .replace(/\s*```$/, "")
+        .trim();
+      recipeJson = JSON.parse(cleaned);
     }
 
     res.writeHead(200, corsHeaders);
-    res.end(JSON.stringify(jsonData));
+    res.end(JSON.stringify(recipeJson));
 
   } catch (err) {
-    console.error("Gemini error:", err);
+    console.error("Gemini error in generate-recipe:", err);
+    const errorMessage = err?.message?.includes("key") || err?.message?.includes("API")
+      ? "Invalid or missing GEMINI_API_KEY. Check Vercel → Settings → Environment Variables."
+      : err?.message || "Failed to generate recipe";
+
     res.writeHead(500, corsHeaders);
-    res.end(JSON.stringify({
-      error: err.message?.includes("key") ? "API key issue" : "Failed to generate recipe"
-    }));
+    res.end(JSON.stringify({ error: errorMessage }));
   }
 }
